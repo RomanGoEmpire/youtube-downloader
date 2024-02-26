@@ -1,5 +1,6 @@
 import re
 import os
+import json
 from datetime import datetime
 from pytube import YouTube, Stream
 import streamlit as st
@@ -14,10 +15,29 @@ st.set_page_config(
 )
 
 
-def download_directory() -> str:
-    home = os.path.expanduser("~")
-    download_path = os.path.join(home, "Downloads")
-    return download_path
+def delete_old_downloads():
+    if not os.path.exists("times.json"):
+        with open("times.json", "w") as f:
+            json.dump({}, f)
+    with open("times.json", "r") as f:
+        times = json.load(f)
+
+    copy_times = times.copy()
+    for filename, time in copy_times.items():
+        if (datetime.now() - datetime.fromisoformat(time)).days > 1:
+            file_path = os.path.join("downloads", filename)
+            os.remove(file_path)
+            del times[filename]
+    with open("times.json", "w") as f:
+        json.dump(times, f)
+
+
+def save_time_to_json(download_time: datetime, filename: str) -> None:
+    with open("times.json", "r") as f:
+        times = json.load(f)
+    times[filename] = download_time.isoformat()
+    with open("times.json", "w") as f:
+        json.dump(times, f)
 
 
 def add_new_row(
@@ -98,9 +118,9 @@ def download(url: str, stream: Stream) -> str:
     yt.register_on_progress_callback(progress_function)
     # This is where the video will be downloaded
     yt.streams.get_by_itag(stream.itag).download(
-        output_path=download_directory(), filename=f"{title}.mp4"
+        output_path="downloads", filename=f"{title}.mp4"
     )
-    return f"{download_directory()}/{title}.mp4"
+    return f"{title}.mp4"
 
 
 @st.cache_resource
@@ -121,7 +141,7 @@ def display_video_info(yt: YouTube) -> None:
         st.subheader(yt.title)
         st.image(yt.thumbnail_url, use_column_width=True)
         columns = st.columns(3)
-        columns[0].container(border=True).metric("Author", yt.author)
+        columns[0].container(border=True).metric("Channel", yt.author)
         columns[1].container(border=True).metric("Views", format_views(yt.views))
         columns[2].container(border=True).metric(
             "Length", f"{round(yt.length/60,2)} min"
@@ -129,6 +149,9 @@ def display_video_info(yt: YouTube) -> None:
 
 
 # - - - - - UI - - - - -
+
+# Delete old downloads
+delete_old_downloads()
 
 # Input form
 st.title("YouTube Downloader")
@@ -150,7 +173,7 @@ yt, possible_streams = get_yt_info(url)
 
 # If no video is found, stop the app
 if yt is None:
-    st.error(f"Cannot find a video with this URL: {e}")
+    st.error("No video found with this URL")
     st.stop()
 
 # Show info about the video
@@ -192,9 +215,10 @@ if col1.button("Start Downloading", type="primary", use_container_width=True):
     # Download
     filename = download(url, selected_stream)
 
+    save_time_to_json(datetime.now(), filename)
+
     # Calculate time passed
     time_passed = (datetime.now() - st.session_state["download_start"]).total_seconds()
-    st.write(f"Download finished in {time_passed:.2f} seconds")
 
     # Error plot
     if show_plots:
@@ -212,10 +236,11 @@ if col1.button("Start Downloading", type="primary", use_container_width=True):
         )
         st.plotly_chart(error_plot)
 
+    st.write(f"**Download finished in {time_passed:.2f} seconds**")
     # Download button
-    if st.download_button(
+    file_path = os.path.join("downloads", filename)
+    st.download_button(
         label="Download Videofile",
-        data=open(filename, "rb").read(),
+        data=open(file_path, "rb").read(),
         file_name=filename,
-    ):
-        os.remove(filename)
+    )
